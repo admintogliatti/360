@@ -1,12 +1,18 @@
+<!DOCTYPE html>
 <html>
 	<head>
+		<meta charset="utf-8">
+		<!-- Этот мета-тег важен для телефонов, он запрещает браузеру масштабировать саму страницу -->
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 		<style>
-			body{
+			body {
 				margin: 0;
+				overflow: hidden; /* Убирает случайные полосы прокрутки */
 			}
-			canvas{
+			canvas {
 				width: 100%;
-				height: 100%
+				height: 100%;
+				display: block;
 			}
 		</style>
 		<!-- Подключение библиотеки Three.js -->
@@ -22,12 +28,16 @@
 			var savedLongitude;
 			var savedLatitude;
 			
+			// Переменные для зума пальцами на телефоне
+			var touchZoomDistanceStart = 0;
+			var touchZoomStartFov = 0;
+			
 			// Указание файла вашей панорамы
 			var panoramasArray = ["picture.jpg"];
 			var panoramaNumber = 0;
 
 			// Настройка рендерера
-			renderer = new THREE.WebGLRenderer();
+			var renderer = new THREE.WebGLRenderer();
 			renderer.setSize(window.innerWidth, window.innerHeight);
 			document.body.appendChild(renderer.domElement);
 			
@@ -50,23 +60,33 @@
 			var sphereMesh = new THREE.Mesh(sphere, sphereMaterial);
 			scene.add(sphereMesh);
 
-			// Обработчики событий мыши
+			// ==========================================
+			// ПОДКЛЮЧЕНИЕ ОБРАБОТЧИКОВ СОБЫТИЙ
+			// ==========================================
+			
+			// 1. Мышь (ПК)
 			document.addEventListener("mousedown", onDocumentMouseDown, false);
 			document.addEventListener("mousemove", onDocumentMouseMove, false);
 			document.addEventListener("mouseup", onDocumentMouseUp, false);
+			
+			// 2. Колесико мыши (ПК - Зум)
+			document.addEventListener("wheel", onDocumentMouseWheel, { passive: false });
+
+			// 3. Сенсорный экран (Мобильные)
+			document.addEventListener("touchstart", onDocumentTouchStart, { passive: false });
+			document.addEventListener("touchmove", onDocumentTouchMove, { passive: false });
+			document.addEventListener("touchend", onDocumentTouchEnd, false);
+			
+			// 4. Изменение размера окна (Поворот телефона)
+			window.addEventListener("resize", onWindowResize, false);
 				
-            render();
-               
-            function render(){
+			render();
+			   
+			function render(){
 				requestAnimationFrame(render);
 				
-				// Автоматическое вращение, если нет ручного управления
-				if(!manualControl){
-					longitude += 0.1;
-				}
-
 				// Ограничение широты (чтобы нельзя было посмотреть прямо в небо или под ноги до искажений)
-                latitude = Math.max(-85, Math.min(85, latitude));
+				latitude = Math.max(-85, Math.min(85, latitude));
 
 				// Перемещение камеры в зависимости от широты и долготы
 				camera.target.x = 500 * Math.sin(THREE.Math.degToRad(90 - latitude)) * Math.cos(THREE.Math.degToRad(longitude));
@@ -78,7 +98,9 @@
 				renderer.render(scene, camera);
 			}
 			
-			// При нажатии мыши включается ручное управление и сохраняются координаты
+			// ==========================================
+			// ФУНКЦИИ УПРАВЛЕНИЯ МЫШЬЮ
+			// ==========================================
 			function onDocumentMouseDown(event){
 				event.preventDefault();
 				manualControl = true;
@@ -88,7 +110,6 @@
 				savedLatitude = latitude;
 			}
 
-			// При движении мыши в режиме ручного управления корректируются координаты
 			function onDocumentMouseMove(event){
 				if(manualControl){
 					longitude = (savedX - event.clientX) * 0.1 + savedLongitude;
@@ -96,9 +117,76 @@
 				}
 			}
 
-			// При отпускании мыши ручное управление отключается
 			function onDocumentMouseUp(event){
 				manualControl = false;
+			}
+
+			// ==========================================
+			// ЗУМ КОЛЕСИКОМ МЫШИ
+			// ==========================================
+			function onDocumentMouseWheel(event){
+				event.preventDefault();
+				// Изменяем угол обзора (FOV) камеры
+				var fov = camera.fov + event.deltaY * 0.05;
+				// Ограничиваем приближение и отдаление (от 10 до 100 градусов)
+				camera.fov = Math.max(10, Math.min(100, fov)); 
+				camera.updateProjectionMatrix();
+			}
+
+			// ==========================================
+			// ФУНКЦИИ УПРАВЛЕНИЯ ПАЛЬЦАМИ (СЕНСОР)
+			// ==========================================
+			function onDocumentTouchStart(event){
+				event.preventDefault();
+				if(event.touches.length === 1){
+					// Касание одним пальцем - вращение
+					manualControl = true;
+					savedX = event.touches[0].pageX;
+					savedY = event.touches[0].pageY;
+					savedLongitude = longitude;
+					savedLatitude = latitude;
+				} else if(event.touches.length === 2){
+					// Касание двумя пальцами - подготовка к зуму
+					manualControl = false;
+					var dx = event.touches[0].pageX - event.touches[1].pageX;
+					var dy = event.touches[0].pageY - event.touches[1].pageY;
+					touchZoomDistanceStart = Math.sqrt(dx * dx + dy * dy);
+					touchZoomStartFov = camera.fov;
+				}
+			}
+
+			function onDocumentTouchMove(event){
+				event.preventDefault();
+				if(event.touches.length === 1 && manualControl){
+					// Движение одним пальцем (коэффициент 0.2 делает свайп чуть быстрее для телефона)
+					longitude = (savedX - event.touches[0].pageX) * 0.2 + savedLongitude;
+					latitude = (event.touches[0].pageY - savedY) * 0.2 + savedLatitude;
+				} else if(event.touches.length === 2){
+					// Движение двумя пальцами (щипок для зума)
+					var dx = event.touches[0].pageX - event.touches[1].pageX;
+					var dy = event.touches[0].pageY - event.touches[1].pageY;
+					var touchZoomDistanceEnd = Math.sqrt(dx * dx + dy * dy);
+					
+					var zoomFactor = touchZoomDistanceStart / touchZoomDistanceEnd;
+					var fov = touchZoomStartFov * zoomFactor;
+					
+					// Ограничиваем зум
+					camera.fov = Math.max(10, Math.min(100, fov));
+					camera.updateProjectionMatrix();
+				}
+			}
+
+			function onDocumentTouchEnd(event){
+				manualControl = false;
+			}
+			
+			// ==========================================
+			// ОБНОВЛЕНИЕ ПРИ ПОВОРОТЕ ЭКРАНА
+			// ==========================================
+			function onWindowResize() {
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize(window.innerWidth, window.innerHeight);
 			}
 		</script>
 	</body>
